@@ -9,8 +9,8 @@ if __name__ == "__main__":
 
     print(client.isConnected())
 
-    client.setAtPosition(0, -900, -100)
+    client.setAtPosition(-500, -800, -100)
 
     sleep(5)
-    client.goTo(-1000, -500, -100)
+    client.goTo(-300, -800, -100)
     
