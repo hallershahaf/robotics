@@ -10,24 +10,30 @@ from random import sample
 from time import sleep
 
 # Amount of points we scan every second
-LIDAR_POINTS_NUM = 25
+LIDAR_POINTS_NUM = 50
+DELAY_BETWEEN_POINTS = 1 / 25
+ANGLE_BLINDSPOT = 20 * np.pi / 180
 # In radians, any points with an angle lesser than this will be considered an obstacle
-ANGLE_THRESHOLD = 7 * np.pi / 180
+ANGLE_THRESHOLD = 5 * np.pi / 180
 # In radians, the angle of the blindspot behind us where we ignore points
 BLINDSPOT_ANGLE = 20 * np.pi / 180
-# In radians, the angle in which we will follow obstacles without colliding
-# NOT CURRENTLY USED
-TRACING_ANGLE = 10 * np.pi / 180
 # In meters, the distance in which we will follow obstacles without colliding
 TRACING_DISTANCE = 5
 # How close to the target do we have to be (in meters) final target
 DISTANCE_THRESHOLD = 3
 # How many meters to add to the points we are using to trace
-DISTANCE_ADDED = 5
+DISTANCE_ADDED = 10
 # Due to drone taking time to readjust, we let the code sleep for abit before continuing
-READJUST_TIMEOUT = 1
+READJUST_TIMEOUT = 1.0
 # Speed we use for the drone, this might be removed later to use dynamic speeds
-default_speed = 7
+straight_default_speed = 4
+left_default_speed = 2
+right_default_speed = 2
+
+# direction states
+RIGHT = 1
+LEFT = -1
+NONE = 0
 
 class DroneClient:
     def __init__(self):
@@ -156,64 +162,84 @@ class DroneClient:
         Returns:
             none
         """
-        self.flyToPosition(x, y, z, default_speed)
+        self.flyToPosition(x, y, z, straight_default_speed)
         sleep(READJUST_TIMEOUT)
 
         counter = 0
         was_tracing = False
+        trace_direction = None
         while self.isDroneAtPoint(x, y, z) is False:
+            point = self.getLidarData().points
             # If no points found then the function returns [0.0]
-            if len(self.getLidarData().points) > 1:
-                print("Found obstacle... ", end="")
+            # Ignore points if we are not tracing, and they are far away
+            if len(point) > 1 and (was_tracing or (np.abs(np.arctan2(point[1], point[0])) < ANGLE_BLINDSPOT)):
                 counter = 0
-
-                # Find all points you can
                 points_drone = []
                 points_world = []
-                for i in range(LIDAR_POINTS_NUM):
-                    point = self.getLidarData().points
-                    if len(point) > 1:
-                        time.sleep(1 / LIDAR_POINTS_NUM)
-                        points_drone += [point]
-                        current_pose = self.getPose()
-                        current_pos = current_pose.pos
-                        orientation = current_pose.orientation
-                        point_world = [np.cos(-orientation.z_rad) * point[0] + np.sin(-orientation.z_rad) * point[1] + current_pos.x_m,
-                                        -np.sin(-orientation.z_rad) * point[0] + np.cos(-orientation.z_rad) * point[1] + current_pos.y_m,
-                                        current_pos.z_m]
-                        points_world += [point_world]
+                if not was_tracing:
+                    print("Found obstacle... ", end="")
+                    # Find all points you can
+                    for i in range(LIDAR_POINTS_NUM):
+                        point = self.getLidarData().points
+                        if len(point) > 1:
+                            time.sleep(DELAY_BETWEEN_POINTS)
+                            points_drone += [point]
+                            current_pose = self.getPose()
+                            current_pos = current_pose.pos
+                            orientation = current_pose.orientation
+                            point_world = [np.cos(-orientation.z_rad) * point[0] + np.sin(-orientation.z_rad) * point[1] + current_pos.x_m,
+                                            -np.sin(-orientation.z_rad) * point[0] + np.cos(-orientation.z_rad) * point[1] + current_pos.y_m,
+                                            current_pos.z_m]
+                            points_world += [point_world]
+                else:
+                    for i in range(LIDAR_POINTS_NUM):
+                        pose = self.getPose()
+                        orientation = pose.orientation
+                        current_pos = pose.pos
+                        drone_to_target = [x - current_pos.x_m, y - current_pos.y_m]
+                        drone_to_target_angle = np.arctan2(drone_to_target[1], drone_to_target[0]) - orientation.z_rad
 
+                        point = self.getLidarData().points
+                        if len(point) > 1 and (np.abs(drone_to_target_angle - np.arctan2(point[1], point[0])) < (np.pi / 2)
+                                               or np.abs(np.arctan2(point[1], point[0]) < (ANGLE_BLINDSPOT))):
+                            print(point)
+                            time.sleep(DELAY_BETWEEN_POINTS)
+                            points_drone += [point]
+                            current_pose = self.getPose()
+                            current_pos = current_pose.pos
+                            orientation = current_pose.orientation
+                            point_world = [np.cos(-orientation.z_rad) * point[0] + np.sin(-orientation.z_rad) * point[1] + current_pos.x_m,
+                                            -np.sin(-orientation.z_rad) * point[0] + np.cos(-orientation.z_rad) * point[1] + current_pos.y_m,
+                                            current_pos.z_m]
+                            points_world += [point_world]
+
+                # No points entered criteria, continue as if nothing happened
+                if len(points_drone) == 0:
+                    print("no points entered criteria")
+                    continue
                 left_point_index = 0
                 drone_to_point = [points_world[left_point_index][0] - current_pos.x_m, points_world[left_point_index][1] - current_pos.y_m]
-                left_angle = (np.arctan2(drone_to_point[1], drone_to_point[0]) - orientation.z_rad) + 2 * np.pi % (2 * np.pi)
+                left_angle = np.arctan2(drone_to_point[1], drone_to_point[0]) - orientation.z_rad
                 right_point_index = left_point_index
                 right_angle = left_angle
                 mid_point_index = None
                 mid_angle = ANGLE_THRESHOLD
 
-                # So we can decide if to trace right or left
-                num_of_left_angles = 0
-                num_of_right_angles = 0
-
                 drone_to_target = [x - current_pos.x_m, y - current_pos.y_m]
-                drone_to_target_angle = np.arctan2(drone_to_target[1], drone_to_target[0]) - orientation.z_rad + 2 * np.pi % (2 * np.pi)
+                drone_to_target_angle = np.arctan2(drone_to_target[1], drone_to_target[0]) - orientation.z_rad
 
                 # We are looking for the farthest points we have to the left and right, and if there are points right in front of us
                 for index, point in enumerate(points_world):
+                    orientation = self.getPose().orientation
                     drone_to_point = [points_world[index][0] - current_pos.x_m, points_world[index][1] - current_pos.y_m]
-                    current_angle_unnormal = np.arctan2(drone_to_point[1], drone_to_point[0]) - orientation.z_rad
-                    # Normalize angle to [-pi, pi]
-                    current_angle = current_angle_unnormal + 2 * np.pi % (2 * np.pi)
+                    current_angle = np.arctan2(drone_to_point[1], drone_to_point[0]) - orientation.z_rad
+                    if current_angle < -np.pi:
+                        current_angle = current_angle % np.pi
 
                     # Points straight behind us cause a problem in the transition between -pi to pi
                     # and frankly aren't that relevant anyway, so we can ignore them
                     if np.abs(current_angle) < (np.pi - BLINDSPOT_ANGLE):
-                        print(current_angle)
                         # Count angles to determine which way to trace
-                        if current_angle < 0:
-                            num_of_right_angles += 1
-                        else:
-                            num_of_left_angles += 1
                         if current_angle < right_angle:
                             right_angle = current_angle
                             right_point_index = index
@@ -224,31 +250,34 @@ class DroneClient:
                             mid_angle = current_angle
                             mid_point_index = index
 
-                print("*****")
-                print("right angle is")
-                print(right_angle)
-                print("left angle is")
+                print(drone_to_target_angle)
                 print(left_angle)
+                print(right_angle)
 
                 # Obstacle is blocking, tracing it until we have a clear vision to the target again
-                if mid_point_index is None:
-                    if was_tracing:
+                if  (trace_direction == LEFT and drone_to_target_angle - left_angle > ANGLE_THRESHOLD) or \
+                    (trace_direction == RIGHT and drone_to_target_angle - right_angle < ANGLE_THRESHOLD):
                         was_tracing = False
+                        trace_direction = None
                         print("Done tracing")
-                        self.flyToPosition(x, y, z, default_speed)
-                    else:
-                        print("Obstacle not in the way, ignoring\n")
-                else:
+                        self.flyToPosition(x, y, z, straight_default_speed)
+                        sleep(READJUST_TIMEOUT)
+                elif was_tracing or mid_point_index is not None:
+                    print("test3")
                     current_dist = np.sqrt((current_pos.x_m - x) ** 2 + (current_pos.y_m - y) ** 2)
-                    mid_point_dist = np.sqrt(points_drone[mid_point_index][0] ** 2 + points_drone[mid_point_index][1] ** 2)
+                    if mid_point_index is not None:
+                        mid_point_dist = np.sqrt(points_drone[mid_point_index][0] ** 2 + points_drone[mid_point_index][1] ** 2)
 
                     # If the target is closer than the points we found, we ignore them.
-                    if current_dist < mid_point_dist:
+                    if mid_point_index is not None and current_dist < mid_point_dist:
                         print("Obstacle is further than target, ignoring\n")
                     else:
                         print("Obstacle is blocking, tracing\n")
                         was_tracing = True
-                        if num_of_left_angles > num_of_right_angles: # Tracing right
+                        dist_right_point = np.sqrt(((points_world[right_point_index][0] - x)**2 +(points_world[right_point_index][1] - y)**2))
+                        dist_left_point = np.sqrt(((points_world[left_point_index][0] - x)**2 +(points_world[left_point_index][1] - y)**2))
+                        if dist_left_point > dist_right_point and trace_direction != LEFT: # Tracing right
+                            trace_direction = RIGHT
                             # Change points from world perspective to drone perspective (original list might be irrelevant due to drone's movement)
                             right_point_drone = [np.cos(orientation.z_rad) * (points_world[right_point_index][0] - current_pos.x_m) + np.sin(orientation.z_rad) * (points_world[right_point_index][1] - current_pos.y_m),
                                                 -np.sin(orientation.z_rad) * (points_world[right_point_index][0] - current_pos.x_m) + np.cos(orientation.z_rad) * (points_world[right_point_index][1] - current_pos.y_m),
@@ -272,9 +301,10 @@ class DroneClient:
                                                 -np.sin(-orientation.z_rad) * right_point_moved[0] + np.cos(-orientation.z_rad) * right_point_moved[1] + current_pos.y_m,
                                                 current_pos.z_m]
 
-                            self.flyToPosition(right_point_world[0], right_point_world[1], current_pos.z_m, default_speed)
+                            self.flyToPosition(right_point_world[0], right_point_world[1], current_pos.z_m, right_default_speed)
                             sleep(READJUST_TIMEOUT)
                         else: # Tracing left
+                            trace_direction = LEFT
                             # Change points from world perspective to drone perspective (original list might be irrelevant due to drone's movement)
                             left_point_drone = [np.cos(orientation.z_rad) * (points_world[left_point_index][0] - current_pos.x_m) + np.sin(orientation.z_rad) * (points_world[left_point_index][1] - current_pos.y_m),
                                                 -np.sin(orientation.z_rad) * (points_world[left_point_index][0] - current_pos.x_m) + np.cos(orientation.z_rad) * (points_world[left_point_index][1] - current_pos.y_m),
@@ -297,7 +327,7 @@ class DroneClient:
                                                 -np.sin(-orientation.z_rad) * left_point_moved[0] + np.cos(-orientation.z_rad) * left_point_moved[1] + current_pos.y_m,
                                                 current_pos.z_m]
 
-                            self.flyToPosition(left_point_world[0], left_point_world[1], current_pos.z_m, default_speed)
+                            self.flyToPosition(left_point_world[0], left_point_world[1], current_pos.z_m, left_default_speed)
                             sleep(READJUST_TIMEOUT)
             # if len(self.getLidarData().points) > 1:
             else:
@@ -306,8 +336,10 @@ class DroneClient:
                 if counter == LIDAR_POINTS_NUM * 2 and was_tracing:
                     counter = 0
                     was_tracing = False
-                    self.flyToPosition(x, y, z, default_speed)
-                time.sleep(1 / LIDAR_POINTS_NUM)
+                    trace_direction = None
+                    self.flyToPosition(x, y, z, straight_default_speed)
+                    sleep(READJUST_TIMEOUT)
+                time.sleep(DELAY_BETWEEN_POINTS)
 
         print("Reached ({},{},{})\n".format(x, y, z))
 
