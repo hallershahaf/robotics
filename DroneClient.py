@@ -6,8 +6,12 @@ import airsim
 import DroneTypes
 import time
 import numpy as np
-from random import sample
 from time import sleep
+# This library plots the direction
+from shapely.geometry.polygon import Polygon, LineString, Point
+from shapely.geometry import mapping
+from visibility_graph_and_shortest_path import get_points_and_dist
+from visibility_graph_and_shortest_path import VisibilityGraph as VG
 
 # Amount of points we scan every second
 LIDAR_POINTS_NUM = 50
@@ -162,6 +166,49 @@ class DroneClient:
         Returns:
             none
         """
+        obstacles = "./obstacles"
+        robot = "./robot"
+        query = "./query"
+        vertices = "./vertices"
+        edges = "./edges"
+
+        c_space_obstacles = []
+        with open(obstacles, 'r') as f:
+            for line in f.readlines():
+                ob_vertices = line.split(' ')
+                if ',' not in ob_vertices:
+                    ob_vertices = ob_vertices[:-1]
+                points = [tuple(map(float, t.split(','))) for t in ob_vertices]
+                c_space_obstacles.append(Polygon(points))
+
+        with open(robot, 'r') as f:
+            source, dist = get_points_and_dist(f.readline())
+
+        c_space_vertices = []
+        with open(vertices, 'r') as f:
+            for line in f.readlines():
+                vertices_line = line.split(' ')
+                points = [tuple(map(float, t.split(','))) for t in vertices_line]
+                c_space_vertices.append(points[0])
+
+        c_space_edges = []
+        with open(edges, 'r') as f:
+            for line in f.readlines():
+                edge_vertices = line.split(' ')
+                points = [tuple(map(float, t.split(','))) for t in edge_vertices]
+                c_space_edges.append(LineString(points))
+
+        with open(query, 'r') as f:
+            dest = tuple(map(float, f.readline().split(',')))
+            start_position = self.getPose().pos
+
+        vg = VG(c_space_edges, c_space_obstacles, c_space_vertices)
+        vg.set_start(start_position)
+        vg.set_goal(dest)
+        path = vg.get_shortest_path()
+        print(path)
+        sleep(500)
+
         self.flyToPosition(x, y, z, straight_default_speed)
         sleep(READJUST_TIMEOUT)
 
