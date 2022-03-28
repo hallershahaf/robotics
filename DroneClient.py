@@ -8,30 +8,36 @@ import time
 import numpy as np
 from time import sleep
 # This library plots the direction
+from Plotter import Plotter
 from shapely.geometry.polygon import Polygon, LineString, Point
 from shapely.geometry import mapping
 from visibility_graph_and_shortest_path import get_points_and_dist
 from visibility_graph_and_shortest_path import VisibilityGraph as VG
 
 # Amount of points we scan every second
-LIDAR_POINTS_NUM = 50
+LIDAR_POINTS_NUM = 25
 DELAY_BETWEEN_POINTS = 1 / 25
-ANGLE_BLINDSPOT = 20 * np.pi / 180
+# Angle cone in front of the drone where it ignores points outside of it when tracing
+ANGLE_BLINDSPOT = 25 * np.pi / 180
 # In radians, any points with an angle lesser than this will be considered an obstacle
-ANGLE_THRESHOLD = 5 * np.pi / 180
+ANGLE_THRESHOLD = 12 * np.pi / 180
 # In radians, the angle of the blindspot behind us where we ignore points
-BLINDSPOT_ANGLE = 20 * np.pi / 180
+BEHIND_BLINDSPOT_ANGLE = 20 * np.pi / 180
 # In meters, the distance in which we will follow obstacles without colliding
 TRACING_DISTANCE = 5
 # How close to the target do we have to be (in meters) final target
 DISTANCE_THRESHOLD = 3
+# Distance from dikstra vertice we ignore
+DISTANCE_TO_VERTICE_THRESHOLD = 5
 # How many meters to add to the points we are using to trace
-DISTANCE_ADDED = 10
+DISTANCE_ADDED = 15
 # Due to drone taking time to readjust, we let the code sleep for abit before continuing
-READJUST_TIMEOUT = 1.0
+READJUST_TIMEOUT = 2.0
+# Minimum amount of time required for the drone to complete a command
+COMMAND_TIME = 0.8
 # Speed we use for the drone, this might be removed later to use dynamic speeds
 straight_default_speed = 4
-left_default_speed = 2
+left_default_speed = 3
 right_default_speed = 2
 
 # direction states
@@ -166,11 +172,14 @@ class DroneClient:
         Returns:
             none
         """
-        obstacles = "./obstacles"
+        obstacles = "./c_space_obstacles2"
         robot = "./robot"
         query = "./query"
-        vertices = "./vertices"
-        edges = "./edges"
+        vertices = "./vertices2"
+        edges = "./edges2"
+
+        file_points = open("D:\Technion\Intro_Robotics\project\points_file.txt", "w")
+        file_drone = open("D:\Technion\Intro_Robotics\project\drone_file.txt", "w")
 
         c_space_obstacles = []
         with open(obstacles, 'r') as f:
@@ -180,9 +189,6 @@ class DroneClient:
                     ob_vertices = ob_vertices[:-1]
                 points = [tuple(map(float, t.split(','))) for t in ob_vertices]
                 c_space_obstacles.append(Polygon(points))
-
-        with open(robot, 'r') as f:
-            source, dist = get_points_and_dist(f.readline())
 
         c_space_vertices = []
         with open(vertices, 'r') as f:
@@ -198,25 +204,41 @@ class DroneClient:
                 points = [tuple(map(float, t.split(','))) for t in edge_vertices]
                 c_space_edges.append(LineString(points))
 
-        with open(query, 'r') as f:
-            dest = tuple(map(float, f.readline().split(',')))
-            start_position = self.getPose().pos
-
+        pos = self.getPose().pos
+        source = (x, y)
+        dest = (pos.x_m, pos.y_m)
         vg = VG(c_space_edges, c_space_obstacles, c_space_vertices)
-        vg.set_start(start_position)
+        vg.set_start(source)
         vg.set_goal(dest)
         path = vg.get_shortest_path()
-        print(path)
-        sleep(500)
-
-        self.flyToPosition(x, y, z, straight_default_speed)
+        
+        dist_to_path = np.sqrt((path[0][1][0] - pos.x_m) ** 2 + (path[0][1][1] - pos.y_m) ** 2)
+        speed_to_path = dist_to_path / COMMAND_TIME
+        vertice = 1
+        if dist_to_path < DISTANCE_TO_VERTICE_THRESHOLD:
+            vertice = 2
+        self.flyToPosition(path[0][vertice][0], path[0][vertice][1], z, np.minimum(straight_default_speed, speed_to_path))
         sleep(READJUST_TIMEOUT)
 
         counter = 0
+        criteria_counter = 0
         was_tracing = False
         trace_direction = None
         while self.isDroneAtPoint(x, y, z) is False:
+            current_pose = self.getPose()
+            current_pos = current_pose.pos
+            file_drone.write(str(current_pos.x_m) + "," + str(current_pos.y_m) + "\n")
+            file_drone.flush()
             point = self.getLidarData().points
+            if len(point) > 1:
+                current_pose = self.getPose()
+                current_pos = current_pose.pos
+                orientation = current_pose.orientation
+                point_world = [np.cos(-orientation.z_rad) * point[0] + np.sin(-orientation.z_rad) * point[1] + current_pos.x_m,
+                                -np.sin(-orientation.z_rad) * point[0] + np.cos(-orientation.z_rad) * point[1] + current_pos.y_m,
+                                current_pos.z_m]
+                file_points.write(str(point_world[0]) + "," + str(point_world[1]) + "\n")
+                file_points.flush()
             # If no points found then the function returns [0.0]
             # Ignore points if we are not tracing, and they are far away
             if len(point) > 1 and (was_tracing or (np.abs(np.arctan2(point[1], point[0])) < ANGLE_BLINDSPOT)):
@@ -248,7 +270,7 @@ class DroneClient:
 
                         point = self.getLidarData().points
                         if len(point) > 1 and (np.abs(drone_to_target_angle - np.arctan2(point[1], point[0])) < (np.pi / 2)
-                                               or np.abs(np.arctan2(point[1], point[0]) < (ANGLE_BLINDSPOT))):
+                                               or np.abs(np.arctan2(point[1], point[0]) < (ANGLE_BLINDSPOT * 3 / 5))):
                             print(point)
                             time.sleep(DELAY_BETWEEN_POINTS)
                             points_drone += [point]
@@ -260,9 +282,21 @@ class DroneClient:
                                             current_pos.z_m]
                             points_world += [point_world]
 
-                # No points entered criteria, continue as if nothing happened
                 if len(points_drone) == 0:
                     print("no points entered criteria")
+                    criteria_counter += 1
+                    if criteria_counter == 4:
+                        criteria_counter = 0
+                        was_tracing = False
+                        trace_direction = None
+                        pos = self.getPose().pos
+                        dest = (pos.x_m, pos.y_m)
+                        vg.set_goal(dest)
+                        path = vg.get_shortest_path()
+                        dist_to_path = np.sqrt((path[0][1][0] - pos.x_m) ** 2 + (path[0][1][1] - pos.y_m) ** 2)
+                        speed_to_path = dist_to_path / COMMAND_TIME
+                        self.flyToPosition(path[0][1][0], path[0][1][1], z, np.minimum(straight_default_speed, speed_to_path))
+                    sleep(READJUST_TIMEOUT)
                     continue
                 left_point_index = 0
                 drone_to_point = [points_world[left_point_index][0] - current_pos.x_m, points_world[left_point_index][1] - current_pos.y_m]
@@ -285,7 +319,7 @@ class DroneClient:
 
                     # Points straight behind us cause a problem in the transition between -pi to pi
                     # and frankly aren't that relevant anyway, so we can ignore them
-                    if np.abs(current_angle) < (np.pi - BLINDSPOT_ANGLE):
+                    if np.abs(current_angle) < (np.pi - BEHIND_BLINDSPOT_ANGLE):
                         # Count angles to determine which way to trace
                         if current_angle < right_angle:
                             right_angle = current_angle
@@ -297,20 +331,24 @@ class DroneClient:
                             mid_angle = current_angle
                             mid_point_index = index
 
-                print(drone_to_target_angle)
-                print(left_angle)
-                print(right_angle)
-
                 # Obstacle is blocking, tracing it until we have a clear vision to the target again
-                if  (trace_direction == LEFT and drone_to_target_angle - left_angle > ANGLE_THRESHOLD) or \
-                    (trace_direction == RIGHT and drone_to_target_angle - right_angle < ANGLE_THRESHOLD):
+                if  (trace_direction == LEFT and drone_to_target_angle - left_angle > ANGLE_THRESHOLD * 3) or \
+                    (trace_direction == RIGHT and drone_to_target_angle - right_angle < ANGLE_THRESHOLD * 3):
                         was_tracing = False
                         trace_direction = None
                         print("Done tracing")
-                        self.flyToPosition(x, y, z, straight_default_speed)
+                        pos = self.getPose().pos
+                        dest = (pos.x_m, pos.y_m)
+                        vg.set_goal(dest)
+                        path = vg.get_shortest_path()
+                        dist_to_path = np.sqrt((path[0][1][0] - pos.x_m) ** 2 + (path[0][1][1] - pos.y_m) ** 2)
+                        speed_to_path = dist_to_path / COMMAND_TIME
+                        vertice = 1
+                        if dist_to_path < DISTANCE_TO_VERTICE_THRESHOLD:
+                            vertice = 2
+                        self.flyToPosition(path[0][vertice][0], path[0][vertice][1], z, np.minimum(straight_default_speed, speed_to_path))
                         sleep(READJUST_TIMEOUT)
                 elif was_tracing or mid_point_index is not None:
-                    print("test3")
                     current_dist = np.sqrt((current_pos.x_m - x) ** 2 + (current_pos.y_m - y) ** 2)
                     if mid_point_index is not None:
                         mid_point_dist = np.sqrt(points_drone[mid_point_index][0] ** 2 + points_drone[mid_point_index][1] ** 2)
@@ -336,7 +374,6 @@ class DroneClient:
 
                             # Find the angle to move the point so we will be TRACING_DISTANCE meters apart
                             # Math is derived from cosine theorem
-                            #print(str((2 * (right_point_size ** 2)) - (TRACING_DISTANCE ** 2)) / (2 * (right_point_size ** 2)))
                             tracing_angle = np.abs(np.arccos(((2 * (right_point_size ** 2)) - (TRACING_DISTANCE ** 2)) / (2 * (right_point_size ** 2))))
 
                             # Now we adjust the angles so we will stay away from the obstacles
@@ -348,7 +385,10 @@ class DroneClient:
                                                 -np.sin(-orientation.z_rad) * right_point_moved[0] + np.cos(-orientation.z_rad) * right_point_moved[1] + current_pos.y_m,
                                                 current_pos.z_m]
 
-                            self.flyToPosition(right_point_world[0], right_point_world[1], current_pos.z_m, right_default_speed)
+                            pos = self.getPose().pos
+                            dist_to_path = np.sqrt((path[0][1][0] - pos.x_m) ** 2 + (path[0][1][1] - pos.y_m) ** 2)
+                            speed_to_path = dist_to_path / COMMAND_TIME
+                            self.flyToPosition(right_point_world[0], right_point_world[1], z, np.minimum(right_default_speed, speed_to_path))
                             sleep(READJUST_TIMEOUT)
                         else: # Tracing left
                             trace_direction = LEFT
@@ -374,17 +414,29 @@ class DroneClient:
                                                 -np.sin(-orientation.z_rad) * left_point_moved[0] + np.cos(-orientation.z_rad) * left_point_moved[1] + current_pos.y_m,
                                                 current_pos.z_m]
 
-                            self.flyToPosition(left_point_world[0], left_point_world[1], current_pos.z_m, left_default_speed)
-                            sleep(READJUST_TIMEOUT)
-            # if len(self.getLidarData().points) > 1:
+                            pos = self.getPose().pos
+                            dist_to_path = np.sqrt((path[0][1][0] - pos.x_m) ** 2 + (path[0][1][1] - pos.y_m) ** 2)
+                            speed_to_path = dist_to_path / COMMAND_TIME
+                            self.flyToPosition(left_point_world[0], left_point_world[1], z, np.minimum(left_default_speed, speed_to_path))
             else:
-                # If we don't find anything within LIDAR_POINTS_NUM points (full scan)
+                # If we don't find anything within 2 LIDAR_POINTS_NUM points (double scan)
                 counter += 1
-                if counter == LIDAR_POINTS_NUM * 2 and was_tracing:
+                if counter == LIDAR_POINTS_NUM * 2:
                     counter = 0
                     was_tracing = False
                     trace_direction = None
-                    self.flyToPosition(x, y, z, straight_default_speed)
+                    pos = self.getPose().pos
+                    dest = (pos.x_m, pos.y_m)
+                    vg.set_goal(dest)
+                    path = vg.get_shortest_path()
+
+                    pos = self.getPose().pos
+                    dist_to_path = np.sqrt((path[0][1][0] - pos.x_m) ** 2 + (path[0][1][1] - pos.y_m) ** 2)
+                    speed_to_path = dist_to_path / COMMAND_TIME
+                    vertice = 1
+                    if dist_to_path < DISTANCE_TO_VERTICE_THRESHOLD:
+                        vertice = 2
+                    self.flyToPosition(path[0][vertice][0], path[0][vertice][1], z, np.minimum(straight_default_speed, speed_to_path))
                     sleep(READJUST_TIMEOUT)
                 time.sleep(DELAY_BETWEEN_POINTS)
 

@@ -342,35 +342,43 @@ class VisibilityGraph:
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument("Robot",
-                        help="A file that holds the starting position of the robot, and the distance from the center of the robot to any of its vertices")
-    parser.add_argument("Obstacles", help="A file that contains the obstacles in the map")
-    parser.add_argument("Query", help="A file that contains the ending position for the robot.")
-    parser.add_argument("Vertices", help="A file that contains the vertices of the visibility graph.")
-    parser.add_argument("Edges", help="A file that contains the edges of the visibility graph.")
-    args = parser.parse_args()
+    #parser = argparse.ArgumentParser()
+    #parser.add_argument("Robot",
+    #                    help="A file that holds the starting position of the robot, and the distance from the center of the robot to any of its vertices")
+    #parser.add_argument("Obstacles", help="A file that contains the obstacles in the map")
+    #parser.add_argument("Query", help="A file that contains the ending position for the robot.")
+    #parser.add_argument("Vertices", help="A file that contains the vertices of the visibility graph.")
+    #parser.add_argument("Edges", help="A file that contains the edges of the visibility graph.")
+    #args = parser.parse_args()
 
-    obstacles = args.Obstacles
-    robot = args.Robot
-    query = args.Query
-    vertices = args.Vertices
-    edges = args.Edges
+    # obstacles = args.Obstacles
+    # robot = args.Robot
+    # query = args.Query
+    # vertices = args.Vertices
+    # edges = args.Edges
 
-    is_valid_file(parser, obstacles)
-    is_valid_file(parser, robot)
-    is_valid_file(parser, query)
-    is_valid_file(parser, vertices)
-    is_valid_file(parser, edges)
+    obstacles = "./obstacles"
+    robot = "./robot"
+    query = "./query"
+    vertices = "./vertices"
+    edges = "./edges"
+    lidar = "./points_file.txt"
+    drone = "./drone_file.txt"
 
-    # workspace_obstacles = []
-    # with open(obstacles, 'r') as f:
-    #     for line in f.readlines():
-    #         ob_vertices = line.split(' ')
-    #         if ',' not in ob_vertices:
-    #             ob_vertices = ob_vertices[:-1]
-    #         points = [tuple(map(float, t.split(','))) for t in ob_vertices]
-    #         workspace_obstacles.append(Polygon(points))
+    #is_valid_file(parser, obstacles)
+    #is_valid_file(parser, robot)
+    #is_valid_file(parser, query)
+    #is_valid_file(parser, vertices)
+    #is_valid_file(parser, edges)
+
+    workspace_obstacles = []
+    with open(obstacles, 'r') as f:
+        for line in f.readlines():
+           ob_vertices = line.split(' ')
+           if ',' not in ob_vertices:
+               ob_vertices = ob_vertices[:-1]
+           points = [tuple(map(float, t.split(','))) for t in ob_vertices]
+           workspace_obstacles.append(Polygon(points))
 
     c_space_obstacles = []
     with open(obstacles, 'r') as f:
@@ -402,6 +410,7 @@ if __name__ == '__main__':
         dest = tuple(map(float, f.readline().split(',')))
 
     # step 1:
+    #dist = 2
     # c_space_obstacles = [get_minkowsky_sum(p, dist) for p in workspace_obstacles]
     # print("***** C_space_obstacles *****")
     # for obs in c_space_obstacles:
@@ -416,7 +425,8 @@ if __name__ == '__main__':
     # print("Done 1")
 
     # step 2:
-    # lines = get_visibility_graph(c_space_obstacles)
+    #lines = get_visibility_graph(c_space_obstacles)
+    #print(lines)
     # vg = VisibilityGraph(lines, c_space_obstacles)
     start_global_time = time.time()
     start_time = time.time()
@@ -437,13 +447,29 @@ if __name__ == '__main__':
     print("Total time: {} sec".format(time.time() - start_global_time))
 
 
-    plotter4 = Plotter()
 
-    # plotter4.add_obstacles(c_space_obstacles)
+
+    lidar_points = []
+    with open(lidar, 'r') as f:
+        for line in f.readlines():
+            vertices_line = line.split(' ')
+            points = [tuple(map(float, t.split(','))) for t in vertices_line]
+            lidar_points.append(points[0])
+
+    drone_points = []
+    with open(drone, 'r') as f:
+        for line in f.readlines():
+            vertices_line = line.split(' ')
+            points = [tuple(map(float, t.split(','))) for t in vertices_line]
+            drone_points.append(points[0])
+
+    plotter4 = Plotter()
     plotter4.add_c_space_obstacles(c_space_obstacles)
-    plotter4.add_visibility_graph(vg.edges)
-    plotter4.add_robot(source, dist)
-    plotter4.add_shorterst_path(shortest_path)
+    #plotter4.add_visibility_graph(vg.edges)
+    #plotter4.add_robot(source, dist)
+    #plotter4.add_shorterst_path(shortest_path)
+    plotter4.add_lidar_points(lidar_points)
+    plotter4.add_drone_points(drone_points)
     plotter4.show_graph()
     print("Done 4")
 

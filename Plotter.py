@@ -11,6 +11,7 @@ class Plotter:
     def __init__(self):
         self.fig = plt.figure()
         self.ax = self.fig.add_subplot()
+        self.ax.invert_xaxis()
         plt.grid()
 
     def add_obstacles(self, obstacles: List[Polygon]):
@@ -39,14 +40,24 @@ class Plotter:
                         alpha=0.4)
                 self.add_robot(edge, self.distance_to_vertex)
                 current_vertex = edge
+    
+    def add_lidar_points(self, points):
+        for point in points:
+            self.ax.plot(point[0], point[1], markersize=1.0, c='b', marker='o')
+            #plt.pause(0.0005)
+
+    def add_drone_points(self, points):
+        for point in points:
+            self.ax.plot(point[0], point[1], markersize=1.4, c='r', marker='o')
+            #plt.pause(0.0005)     
 
     def show_graph(self):
         plt.autoscale()
-        self.ax.invert_xaxis()
+        #self.ax.invert_xaxis()
         self.ax.set_axisbelow(True)
         plt.title('Height = -100[m]')
         plt.xlabel('X[m]')
         plt.ylabel('Y[m]')
-        plt.draw()  # draw the plot
-        plt.pause(10)
-        # plt.show()
+        #plt.draw()  #draw the plot
+        #plt.pause(10)
+        plt.show()
